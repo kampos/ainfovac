@@ -1,0 +1,27 @@
+name: ainfovac
+version: "14.0.1"
+summary: Gambas hello world example
+description: Gambas hello world example
+grade: stable
+confinement: devmode
+
+apps:
+  vulgry:
+    command: desktop-launch $SNAP/bin/ainfovac.gambas
+    plugs: [unity7, x11, network, network-bind, home, gsettings]
+
+parts:
+  vulgry:
+    source: /home/kampos/Almacen/Debian/ainfovac
+    plugin: autotools
+    install-via: prefix
+    build-packages:
+      - gambas3
+     
+    stage-packages:
+      - mdbtools
+      - unzip
+      - curl
+      - wkhtmltopdf
+   
+    after: [desktop-gtk3]

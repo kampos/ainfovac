@@ -1,27 +1,171 @@
 name: ainfovac
-version: "14.0.1"
-summary: Gambas hello world example
-description: Gambas hello world example
+base: core26
+version: '22.0.0'
+title: AinfoVac
+summary: Xestión integral da empresa agrogandeira
+description: |
+  AinfoVac centraliza a xestión económica, gandeira e de cultivos dunha
+  explotación agraria. Inclúe facturación, control animal, caderno de campo,
+  informes técnicos e importación de documentos.
+license: GPL-3.0
+contact: mailto:campos@fonteboa.es
+website: https://www.ainfogra.com
 grade: stable
-confinement: devmode
+confinement: strict
+
+lint:
+  ignore:
+    - library
+
+platforms:
+  amd64:
 
 apps:
-  vulgry:
-    command: desktop-launch $SNAP/bin/ainfovac.gambas
-    plugs: [unity7, x11, network, network-bind, home, gsettings]
+  ainfovac:
+    command: bin/ainfovac-launch
+    extensions:
+      - gpu
+    desktop: usr/share/applications/ainfovac.desktop
+    environment:
+      GB_PATH: $SNAP/usr/lib/gambas3
+      LD_LIBRARY_PATH: $SNAP/usr/lib/x86_64-linux-gnu:$SNAP/usr/lib/x86_64-linux-gnu/libproxy:$SNAP/lib/x86_64-linux-gnu:$SNAP_LIBRARY_PATH
+      QT_PLUGIN_PATH: $SNAP/usr/lib/x86_64-linux-gnu/qt6/plugins
+      QT_QPA_PLATFORMTHEME: gtk3
+      GTK_USE_PORTAL: '1'
+      PATH: $SNAP/usr/sbin:$SNAP/usr/bin:$SNAP/sbin:$SNAP/bin:$PATH
+      PYTHONPATH: $SNAP/usr/lib/python3/dist-packages
+      TMPDIR: $SNAP_USER_COMMON/tmp
+      QTWEBENGINE_DISABLE_SANDBOX: '1'
+      QTWEBENGINE_CHROMIUM_FLAGS: --disable-dev-shm-usage
+    plugs:
+      - adb-support
+      - raw-usb
+      - removable-media
+      - dot-ainfovac
+      - browser-support
+      - audio-playback
+      - cups
+      - desktop
+      - desktop-legacy
+      - gtk-3-themes
+      - icon-themes
+      - sound-themes
+      - gsettings
+      - home
+      - network
+      - network-bind
+      - opengl
+      - wayland
+      - x11
+
+plugs:
+  gtk-3-themes:
+    interface: content
+    target: $SNAP/data-dir/themes
+    default-provider: gtk-common-themes
+
+  icon-themes:
+    interface: content
+    target: $SNAP/data-dir/icons
+    default-provider: gtk-common-themes
+
+  sound-themes:
+    interface: content
+    target: $SNAP/data-dir/sounds
+    default-provider: gtk-common-themes
+
+  browser-support:
+    interface: browser-support
+    allow-sandbox: false
+
+  dot-ainfovac:
+    interface: personal-files
+    write:
+      - $HOME/.ainfovac
+
+layout:
+  /usr/share/ainfovac:
+    bind: $SNAP/usr/share/ainfovac
 
 parts:
-  vulgry:
-    source: /home/kampos/Almacen/Debian/ainfovac
-    plugin: autotools
-    install-via: prefix
+  ainfovac:
+    plugin: nil
     build-packages:
-      - gambas3
-     
+      - dpkg-dev
+      - gcc
     stage-packages:
+      - adb
+      - curl
       - mdbtools
       - unzip
-      - curl
-      - wkhtmltopdf
-   
-    after: [desktop-gtk3]
+      - heif-gdk-pixbuf
+      - gambas3-gb-chart
+      - gambas3-gb-compress
+      - gambas3-gb-db
+      - gambas3-gb-db-form
+      - gambas3-gb-db-mysql
+      - gambas3-gb-db-sqlite3
+      - gambas3-gb-desktop
+      - gambas3-gb-desktop-x11
+      - gambas3-gb-form
+      - gambas3-gb-form-dialog
+      - gambas3-gb-form-mdi
+      - gambas3-gb-form-print
+      - gambas3-gb-form-stock
+      - gambas3-gb-image
+      - gambas3-gb-image-effect
+      - gambas3-gb-net
+      - gambas3-gb-net-curl
+      - gambas3-gb-opengl
+      - gambas3-gb-pcre
+      - gambas3-gb-qt6
+      - gambas3-gb-qt6-ext
+      - gambas3-gb-qt6-opengl
+      - gambas3-gb-qt6-wayland
+      - gambas3-gb-qt6-webview
+      - gambas3-gb-qt6-x11
+      - gambas3-gb-settings
+      - gambas3-gb-util
+      - gambas3-gb-util-web
+      - gambas3-gb-web
+      - gambas3-gb-xml
+      - gambas3-gb-xml-xslt
+      - gambas3-runtime
+      # Required by gb.qt6.webview. The Gambas package pulls the WebEngine
+      # libraries and data, but not the separate QtWebEngineProcess executable.
+      - libqt6webenginecore6-bin
+      - libqt6webengine6-data
+      - libjxl-gdk-pixbuf
+      - libx11-6
+      - libx11-xcb1
+      - libxext6
+      - libxcb1
+      - libxcb-randr0
+      - libxcb-render-util0
+      - libxcb-shm0
+      - libxcb-sync1
+      - libxcb-xfixes0
+      - libxml2-16
+      - libproxy1v5
+      - librsvg2-common
+      - libwmf-0.2-7-gtk
+      - poppler-utils
+      - qt6-gtk-platformtheme
+      - qt6-wayland
+      - sqlite3
+      - tesseract-ocr
+      - tesseract-ocr-eng
+      - tesseract-ocr-glg
+      - tesseract-ocr-spa
+      - weasyprint
+      - webp-pixbuf-loader
+    override-build: |
+      craftctl default
+      "$CRAFT_PROJECT_DIR/snap/build-snap.sh" "$CRAFT_PART_INSTALL"
+    prime:
+      - -usr/share/doc
+      - -usr/share/man
+      - -usr/share/lintian
+      - -usr/share/bug
+      - -usr/share/applications/python*.desktop
+      - -usr/share/icons/hicolor/icon-theme.cache

@@ -1,0 +1,273 @@
+#!/bin/sh
+set -eu
+
+umask 077
+
+SNAP_HOME=${HOME:?HOME is not set}
+REAL_HOME=${SNAP_REAL_HOME:?SNAP_REAL_HOME is not available}
+AINFOVAC_REAL_DIR="$REAL_HOME/.ainfovac"
+AINFOVAC_LINK="$SNAP_HOME/.ainfovac"
+
+# Gambas also obtains the user home through getpwuid()/getpwnam().
+# The preload shim redirects those calls to the same virtual HOME.
+export AINFOVAC_SNAP_HOME="$SNAP_HOME"
+
+export XDG_DATA_DIRS="$SNAP/data-dir:$SNAP/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+export XDG_CACHE_HOME="$SNAP_USER_COMMON/.cache"
+export XDG_CONFIG_HOME="$SNAP_USER_COMMON/.config"
+export XDG_DATA_HOME="$SNAP_USER_COMMON/.local/share"
+export TMPDIR="$SNAP_USER_COMMON/tmp"
+export ANDROID_USER_HOME="$SNAP_USER_COMMON/.android"
+export ANDROID_SDK_HOME="$SNAP_USER_COMMON"
+
+export GDK_PIXBUF_MODULEDIR="$SNAP/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders"
+export GDK_PIXBUF_MODULE_FILE="$SNAP_USER_COMMON/gdk-pixbuf-loaders.cache"
+export LD_PRELOAD="$SNAP/usr/lib/ainfovac/libgambas-snap-compat.so${LD_PRELOAD:+:$LD_PRELOAD}"
+export LD_LIBRARY_PATH="$SNAP/usr/lib/x86_64-linux-gnu/libproxy${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+# Gambas gb.qt6.webview uses Qt WebEngine on Linux. The Chromium sandbox is
+# disabled because snap strict confinement is the outer sandbox.
+export QT_QPA_PLATFORM=xcb
+# Load Qt's GTK platform theme before Gambas creates QApplication. This lets
+# the confined Qt 6 runtime obtain the host light/dark preference through the
+# desktop portal and use themes mounted from gtk-common-themes.
+export QT_QPA_PLATFORMTHEME=gtk3
+export GTK_USE_PORTAL=1
+export QTWEBENGINE_DISABLE_SANDBOX=1
+export QTWEBENGINE_CHROMIUM_FLAGS="${QTWEBENGINE_CHROMIUM_FLAGS:+$QTWEBENGINE_CHROMIUM_FLAGS }--disable-dev-shm-usage"
+
+# Qt WebEngine is split into a library/data package and a separate helper
+# executable package. Always point Qt at the copy staged inside the snap.
+export QTWEBENGINEPROCESS_PATH="$SNAP/usr/lib/qt6/libexec/QtWebEngineProcess"
+export QTWEBENGINE_RESOURCES_PATH="$SNAP/usr/share/qt6/resources"
+export QTWEBENGINE_LOCALES_PATH="$SNAP/usr/share/qt6/translations/qtwebengine_locales"
+
+if [ ! -x "$QTWEBENGINEPROCESS_PATH" ]; then
+  printf 'ERROR: QtWebEngineProcess is missing: %s\n' "$QTWEBENGINEPROCESS_PATH" >&2
+  exit 77
+fi
+
+mkdir -p \
+  "$XDG_CACHE_HOME" \
+  "$XDG_CONFIG_HOME" \
+  "$XDG_DATA_HOME" \
+  "$TMPDIR" \
+  "$ANDROID_USER_HOME" \
+  "$SNAP_USER_COMMON/logs"
+chmod 700 "$TMPDIR" "$ANDROID_USER_HOME" "$SNAP_USER_COMMON/logs"
+
+# Keep one previous execution log. This is essential when the app is launched
+# from the desktop and its stderr would otherwise be lost.
+LOG_FILE="$SNAP_USER_COMMON/logs/ainfovac-last.log"
+PREVIOUS_LOG="$SNAP_USER_COMMON/logs/ainfovac-previous.log"
+if [ -f "$LOG_FILE" ]; then
+  mv -f "$LOG_FILE" "$PREVIOUS_LOG"
+fi
+exec >>"$LOG_FILE" 2>&1
+
+printf '\n===== AinfoVac start %s =====\n' "$(date -Is 2>/dev/null || date)"
+printf 'SNAP=%s\nSNAP_REVISION=%s\nHOME=%s\nSNAP_REAL_HOME=%s\n' \
+  "$SNAP" "${SNAP_REVISION:-unknown}" "$HOME" "$REAL_HOME"
+
+if ! snapctl is-connected dot-ainfovac; then
+  printf '%s\n' \
+    'ERROR: AinfoVac needs access to the historical ~/.ainfovac directory.' \
+    'Connect it with: sudo snap connect ainfovac:dot-ainfovac' >&2
+  exit 1
+fi
+
+if ! snapctl is-connected browser-support; then
+  printf '%s\n' \
+    'WARNING: browser-support is disconnected; the Qt WebEngine window may fail.' \
+    'Connect it with: sudo snap connect ainfovac:browser-support' >&2
+fi
+
+if ! snapctl is-connected adb-support; then
+  printf '%s\n' 'WARNING: Android synchronisation is disabled (adb-support disconnected).' >&2
+fi
+if ! snapctl is-connected raw-usb; then
+  printf '%s\n' 'WARNING: raw USB access is disconnected.' >&2
+fi
+
+mkdir -p "$AINFOVAC_REAL_DIR"
+chmod 700 "$AINFOVAC_REAL_DIR" 2>/dev/null || true
+
+dir_is_empty() {
+  [ -z "$(find "$1" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]
+}
+
+# Redirect only ~/.ainfovac to the real home. Never merge two non-empty trees:
+# doing so can combine incompatible or half-created databases.
+if [ -L "$AINFOVAC_LINK" ]; then
+  link_target=$(readlink "$AINFOVAC_LINK" || true)
+  if [ "$link_target" != "$AINFOVAC_REAL_DIR" ]; then
+    rm -f "$AINFOVAC_LINK"
+    ln -s "$AINFOVAC_REAL_DIR" "$AINFOVAC_LINK"
+  fi
+elif [ -e "$AINFOVAC_LINK" ]; then
+  migration_backup="$SNAP_USER_COMMON/ainfovac-snap-local-${SNAP_REVISION:-unknown}-$(date +%s)"
+  mv "$AINFOVAC_LINK" "$migration_backup"
+
+  if dir_is_empty "$AINFOVAC_REAL_DIR" && [ -d "$migration_backup" ]; then
+    cp -a "$migration_backup/." "$AINFOVAC_REAL_DIR/"
+    printf 'Migrated old snap-local data from %s\n' "$migration_backup"
+  else
+    printf 'Preserved old snap-local data without merging it: %s\n' "$migration_backup"
+  fi
+  ln -s "$AINFOVAC_REAL_DIR" "$AINFOVAC_LINK"
+else
+  ln -s "$AINFOVAC_REAL_DIR" "$AINFOVAC_LINK"
+fi
+
+sqlite_ok() {
+  db=$1
+  [ -s "$db" ] || return 1
+  [ "$(sqlite3 "$db" 'PRAGMA quick_check;' 2>/dev/null | head -n 1)" = "ok" ]
+}
+
+copy_required() {
+  src=$1
+  dst=$2
+  if [ ! -e "$src" ]; then
+    printf 'ERROR: required seed file is missing: %s\n' "$src" >&2
+    return 1
+  fi
+  mkdir -p "$(dirname "$dst")"
+  cp -a "$src" "$dst"
+}
+
+seed_fresh_install() {
+  src_dir="$SNAP/usr/share/ainfovac"
+  dst_dir="$AINFOVAC_REAL_DIR"
+  marker="$dst_dir/.snap-seed-complete-v1"
+
+  # Existing databases belong to the user. Validate, but never alter them.
+  if [ -e "$dst_dir/empk" ]; then
+    if ! sqlite_ok "$dst_dir/empk"; then
+      printf 'ERROR: %s exists but is not a valid SQLite database. No repair was attempted.\n' \
+        "$dst_dir/empk" >&2
+      exit 70
+    fi
+    printf 'Existing empk detected; seed and SQL mutations skipped.\n'
+    return 0
+  fi
+
+  # A partially-created tree must not be silently treated as a clean install.
+  if ! dir_is_empty "$dst_dir"; then
+    printf '%s\n' \
+      "ERROR: $dst_dir contains partial data but no empk database." \
+      'Back it up and rename it before retrying a genuinely clean first launch.' >&2
+    exit 71
+  fi
+
+  stage=$(mktemp -d "$SNAP_USER_COMMON/ainfovac-seed.XXXXXX")
+  trap 'rm -rf "${stage:-}"' EXIT HUP INT TERM
+
+  mkdir -p \
+    "$stage/informes" \
+    "$stage/fotografias/lateral" \
+    "$stage/fotografias/frontal" \
+    "$stage/fotografias/emp_001/frontal" \
+    "$stage/fotografias/emp_001/lateral" \
+    "$stage/seg" \
+    "$stage/emp_001"
+
+  for file in empk rex ainfovacubica Android sql.sql; do
+    copy_required "$src_dir/$file" "$stage/$file"
+  done
+
+  if [ -e "$src_dir/ainfogra_local.html" ]; then
+    cp -a "$src_dir/ainfogra_local.html" "$stage/ainfogra_local.html"
+  else
+    copy_required "$src_dir/ainfogra_local.txt" "$stage/ainfogra_local.html"
+  fi
+  copy_required "$src_dir/ainfogra_local.txt" "$stage/ainfogra_local.txt"
+
+  for file in config.css config_small.css logo.png; do
+    copy_required "$src_dir/informes/$file" "$stage/informes/$file"
+  done
+
+  for base in kfactura coeficientes cultivos cultivos2 gando gf kabono xenes \
+    lotes tratamentos incidencias; do
+    copy_required "$src_dir/bases/$base" "$stage/emp_001/$base"
+  done
+
+  if ! sqlite_ok "$stage/empk"; then
+    printf 'ERROR: packaged seed empk is invalid: %s\n' "$src_dir/empk" >&2
+    exit 72
+  fi
+
+  # These changes are allowed only in the private staging tree of a genuinely
+  # fresh install. They are never applied to an existing user database.
+  sqlite3 "$stage/empk" <<SQL
+.bail on
+ATTACH DATABASE '$src_dir/empk' AS seed;
+INSERT OR IGNORE INTO configuracion
+  SELECT * FROM seed.configuracion WHERE id = '001';
+INSERT OR IGNORE INTO data VALUES('001', date('now'));
+INSERT OR REPLACE INTO defecto VALUES(1, '001');
+UPDATE configuracion SET sau = 0.0 WHERE sau IS NULL;
+UPDATE configuracion SET cuota = 0 WHERE cuota IS NULL;
+SQL
+
+  if ! sqlite_ok "$stage/empk"; then
+    printf 'ERROR: seed empk failed validation after initialisation.\n' >&2
+    exit 73
+  fi
+
+  printf '1' > "$stage/pasqlite3"
+  printf '%s\n' "${SNAP_REVISION:-unknown}" > "$stage/.snap-seed-complete-v1"
+
+  cp -a "$stage/." "$dst_dir/"
+  rm -rf "$stage"
+  trap - EXIT HUP INT TERM
+  printf 'Fresh AinfoVac data initialised successfully.\n'
+}
+
+seed_fresh_install
+
+if [ ! -s "$GDK_PIXBUF_MODULE_FILE" ] && \
+   [ -x "$SNAP/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders" ]; then
+  set -- "$GDK_PIXBUF_MODULEDIR"/*.so
+  if [ -e "$1" ]; then
+    "$SNAP/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders" \
+      "$@" > "$GDK_PIXBUF_MODULE_FILE"
+  else
+    unset GDK_PIXBUF_MODULE_FILE
+  fi
+fi
+
+
+# Prepare Gambas' security directory explicitly. Gambas uses /tmp/gambas.$UID
+# independently of TMPDIR and aborts if its owner or mode is unexpected.
+GAMBAS_TEMP="/tmp/gambas.$(id -u)"
+if [ -e "$GAMBAS_TEMP" ] && [ ! -d "$GAMBAS_TEMP" ]; then
+  printf 'ERROR: %s exists but is not a directory.\n' "$GAMBAS_TEMP" >&2
+  exit 74
+fi
+if [ -d "$GAMBAS_TEMP" ]; then
+  temp_uid=$(stat -c '%u' "$GAMBAS_TEMP" 2>/dev/null || printf 'unknown')
+  temp_gid=$(stat -c '%g' "$GAMBAS_TEMP" 2>/dev/null || printf 'unknown')
+  temp_mode=$(stat -c '%a' "$GAMBAS_TEMP" 2>/dev/null || printf 'unknown')
+  printf 'Existing Gambas temp: %s owner=%s:%s mode=%s\n' \
+    "$GAMBAS_TEMP" "$temp_uid" "$temp_gid" "$temp_mode"
+  if [ "$temp_uid" != "$(id -u)" ] || [ "$temp_gid" != "$(id -g)" ]; then
+    printf 'ERROR: stale Gambas temp directory has the wrong owner: %s\n' \
+      "$GAMBAS_TEMP" >&2
+    exit 75
+  fi
+  chmod 700 "$GAMBAS_TEMP"
+else
+  mkdir -m 700 "$GAMBAS_TEMP"
+  printf 'Created Gambas temp directory: %s\n' "$GAMBAS_TEMP"
+fi
+
+printf 'AINFOVAC_SNAP_HOME=%s\nLD_PRELOAD=%s\n' \
+  "$AINFOVAC_SNAP_HOME" "$LD_PRELOAD"
+if [ ! -r "$SNAP/usr/lib/ainfovac/libgambas-snap-compat.so" ]; then
+  printf 'ERROR: compatibility library is missing from the installed snap.\n' >&2
+  exit 76
+fi
+
+printf 'Launching Gambas application...\n'
+exec "$SNAP/usr/bin/gbr3" "$SNAP/usr/bin/ainfovac" "$@"

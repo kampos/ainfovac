@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=AinfoVac
+Name[gl]=AinfoVac
+Comment=Xestión integral da empresa agrogandeira
+Comment[es]=Gestión integral de la empresa agroganadera
+Exec=ainfovac
+Icon=${SNAP}/usr/share/ainfovac/pixmaps/ainfogra.xpm
+Terminal=false
+Type=Application
+StartupNotify=true
+Categories=Office;Finance;
